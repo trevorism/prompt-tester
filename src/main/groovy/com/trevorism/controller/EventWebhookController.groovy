@@ -31,10 +31,10 @@ class EventWebhookController {
 
     @Tag(name = "Webhook Operations")
     @Operation(summary = "Receives a pushed event for the given topic (public)")
-    @Post(value = "/{topic}", consumes = [MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN], produces = MediaType.TEXT_PLAIN)
-    HttpResponse<String> receive(String topic, @Body String payload) {
+    @Post(value = "/{topic}", consumes = MediaType.APPLICATION_JSON, produces = MediaType.APPLICATION_JSON)
+    HttpResponse<Map> receive(String topic, @Body String payload) {
         log.info("Received webhook for topic '{}' ({} bytes)", topic, payload?.length() ?: 0)
         eventStore.record(topic, payload ?: "")
-        return HttpResponse.ok("received")
+        return HttpResponse.ok([received: true, topic: topic])
     }
 }
