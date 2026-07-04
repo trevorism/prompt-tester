@@ -1,52 +1,31 @@
 package com.trevorism.controller
 
-import com.trevorism.model.TestResult
-import com.trevorism.model.TestSuite
+import com.trevorism.model.EventTestReport
+import com.trevorism.model.EventTestRequest
 import com.trevorism.secure.Roles
 import com.trevorism.secure.Secure
+import com.trevorism.service.PromptEventTestService
 import io.micronaut.http.MediaType
 import io.micronaut.http.annotation.Body
 import io.micronaut.http.annotation.Controller
 import io.micronaut.http.annotation.Post
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 @Controller("/test")
 class WebTestController {
 
-    private static final Logger log = LoggerFactory.getLogger(WebTestController.class.name)
+    private final PromptEventTestService promptEventTestService
+
+    WebTestController(PromptEventTestService promptEventTestService) {
+        this.promptEventTestService = promptEventTestService
+    }
 
     @Tag(name = "Test Endpoint Operations")
-    @Operation(summary = "Tests event alerting system **Secure")
+    @Operation(summary = "Validates the prompt event system end-to-end (subscribe, trigger, verify) **Secure")
     @Post(produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)
     @Secure(Roles.USER)
-    TestResult testPromptSystem(@Body TestSuite testSuite) {
-        //Start a millisecond timer
-        long startTime = System.currentTimeMillis()
-        def allTestResults = []
-        try {
-            //Put tests here
-
-            boolean didAllTestsPass = allTestResults.every { it }
-            return createTestResult(testSuite, didAllTestsPass, allTestResults.size(), startTime)
-        } catch (Exception e) {
-            log.warn("Test has failures", e)
-
-        }
-        return createTestResult(testSuite, false, allTestResults.size(), startTime)
+    EventTestReport testPromptSystem(@Body EventTestRequest request) {
+        promptEventTestService.runTests(request ?: new EventTestRequest())
     }
-
-    private static TestResult createTestResult(TestSuite testSuite, boolean success, int numberOfTests, long startTime) {
-        int duration = (int) (System.currentTimeMillis() - startTime)
-        new TestResult([
-                service       : testSuite.source,
-                kind          : testSuite.kind,
-                success       : success,
-                numberOfTests : numberOfTests,
-                durationMillis: duration
-        ])
-    }
-
 }
