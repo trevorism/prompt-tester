@@ -1,0 +1,107 @@
+buildscript {
+    ext {
+        creds = {
+            username = findProperty("github.user") ?: System.getenv("GITHUB_ACTOR")
+            password = findProperty("github.token") ?: System.getenv("GITHUB_TOKEN")
+        }
+    }
+    repositories {
+        mavenCentral()
+        maven {
+            url "https://plugins.gradle.org/m2/"
+        }
+        maven {
+            url uri("https://maven.pkg.github.com/trevorism/gradle-acceptance-plugin")
+            credentials creds
+        }
+    }
+    dependencies {
+        classpath 'com.google.cloud.tools:appengine-gradle-plugin:2.8.7'
+        classpath 'com.trevorism:gradle-acceptance-plugin:2.8.2'
+    }
+}
+
+plugins {
+    id("groovy")
+    id("com.gradleup.shadow") version "9.4.1"
+    id("io.micronaut.application") version "5.0.0"
+    id("jacoco")
+}
+
+
+apply plugin: 'com.google.cloud.tools.appengine'
+apply plugin: "com.trevorism.gradle.acceptance"
+
+group = "com.trevorism"
+
+repositories {
+    mavenCentral()
+    maven {
+        url uri("https://maven.pkg.github.com/trevorism/secure-http-utils")
+        credentials creds
+    }
+}
+
+dependencies {
+    annotationProcessor("io.micronaut.validation:micronaut-validation-processor")
+
+    implementation("io.micronaut.groovy:micronaut-runtime-groovy")
+    implementation("io.micronaut:micronaut-jackson-databind")
+    implementation("io.micronaut.security:micronaut-security")
+    runtimeOnly("org.yaml:snakeyaml")
+
+    implementation("jakarta.annotation:jakarta.annotation-api")
+    implementation 'io.projectreactor:reactor-core:3.8.5'
+
+    implementation("io.swagger.core.v3:swagger-annotations")
+    compileOnly("io.micronaut.openapi:micronaut-openapi"){
+        exclude module:"slf4j-nop"
+    }
+
+    runtimeOnly("ch.qos.logback:logback-classic")
+
+    testImplementation 'com.trevorism:test-result-events:0.3.0'
+    acceptanceImplementation 'io.cucumber:cucumber-groovy:6.10.4'
+}
+
+application {
+    mainClass.set("com.trevorism.Application")
+}
+
+graalvmNative.toolchainDetection = false
+micronaut {
+    runtime("netty")
+    testRuntime("junit5")
+    processing {
+        incremental(true)
+        annotations("com.trevorism.*")
+    }
+}
+
+tasks.withType(GroovyCompile) {
+    groovyOptions.forkOptions.jvmArgs.add('-Dgroovy.parameters=true')
+    groovyOptions.forkOptions.jvmArgs.add('-Dmicronaut.openapi.views.spec=rapidoc.enabled=false,swagger-ui.enabled=true,swagger-ui.theme=flattop')
+}
+
+appengine {
+    stage.artifact = layout.buildDirectory.file("libs/${project.name}-all.jar")
+    deploy {
+        projectId = "trevorism-testing"
+        version = "0-1-0"
+    }
+}
+
+test {
+    systemProperty ("trevorism.test.event", findProperty("trevorism.test.event") == "enabled" ? project.name : null)
+}
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.4
+            }
+        }
+    }
+}
+build.dependsOn jacocoTestCoverageVerification
