@@ -86,7 +86,10 @@ class PromptEventTestService {
             List<String> expected = new ArrayList<>(IMMEDIATE_TOPICS)
             if (includeDueDate) {
                 // 5) questionOverdue, 6) approvalExpired -- leave unanswered so the scheduler fires them.
-                long dueAt = start + (dueOffset * 1000L)
+                // Compute the due date from NOW (not the run start): creating the subscriptions and the
+                // immediate-event questions takes tens of seconds, so a start-relative offset can already
+                // be in the past by the time these are created, and prompt then skips scheduling the callback.
+                long dueAt = System.currentTimeMillis() + (dueOffset * 1000L)
                 createQuestion(promptUrl, [text: "${MARKER} overdue question ${start}".toString(),
                                            kind: "question", dueDate: dueAt], questionIds)
                 createQuestion(promptUrl, [text: "${MARKER} expiring approval ${start}".toString(),
