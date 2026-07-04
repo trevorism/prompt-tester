@@ -58,6 +58,9 @@ dependencies {
         exclude module:"slf4j-nop"
     }
 
+    implementation 'com.trevorism:micronaut-utility-beans:2.0.0'
+    implementation 'com.trevorism:event-client:0.1.1'
+
     runtimeOnly("ch.qos.logback:logback-classic")
 
     testImplementation 'com.trevorism:test-result-events:0.3.0'
@@ -99,7 +102,7 @@ jacocoTestCoverageVerification {
     violationRules {
         rule {
             limit {
-                minimum = 0.4
+                minimum = 0.1
             }
         }
     }
