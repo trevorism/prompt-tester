@@ -68,6 +68,7 @@ class PromptEventTestService {
 
         TestRun testRun = new TestRun(source: testSuite.source, kind: testSuite.kind,
                 triggeredAt: Instant.now().toString())
+        receiptService.resetClaims()
         receiptService.storeRun(testRun)
 
         List<String> questionIds = []
