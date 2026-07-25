@@ -61,8 +61,8 @@ class ReceiptService {
         secureHttpClient.post(OBJECT_URL, json)
     }
 
-    /** True if a receipt exists for the topic, at or after {@code since}, from one of these questions. */
-    boolean receivedSince(String topic, Instant since, Collection<String> questionIds) {
+    /** True if a receipt exists for the topic, at or after {@code since}, carrying this test's marker. */
+    boolean receivedSince(String topic, Instant since, String marker) {
         try {
             String response = secureHttpClient.get("${OBJECT_URL}/${topic}".toString())
             if (!response) return false
@@ -70,7 +70,7 @@ class ReceiptService {
             String timestamp = record?.timestamp
             if (!timestamp) return false
             if (Instant.parse(timestamp).isBefore(since)) return false
-            return belongsToRun(record?.payload as String, questionIds)
+            return (record?.payload as String)?.contains(marker)
         } catch (Exception e) {
             log.debug("No receipt yet for ${topic}: ${e.message}")
             return false
@@ -85,9 +85,4 @@ class ReceiptService {
         }
     }
 
-    private boolean belongsToRun(String payload, Collection<String> questionIds) {
-        if (!payload || !questionIds) return false
-        String questionId = gson.fromJson(payload, Map)?.questionId
-        return questionId && questionIds.contains(questionId)
-    }
 }

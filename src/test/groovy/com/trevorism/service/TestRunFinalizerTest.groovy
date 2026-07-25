@@ -22,13 +22,13 @@ class TestRunFinalizerTest {
     void testCompleteRunPublishesAPassingResult() {
         Instant triggeredAt = Instant.now().minusSeconds(5)
         storeRun(triggeredAt, false)
-        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.plusSeconds(1), "123") }
+        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.plusSeconds(1), PromptEventTestService.MARKER) }
 
         finalizer().finalizeIfComplete()
 
         assertEquals(1, sentEvents.size())
         assertTrue(sentEvents.first().url.endsWith("/event/testResult"))
-        Map event = gson.fromJson(sentEvents.first().body, Map)
+        Map event = publishedEvent()
         assertTrue(event.success as boolean)
         assertEquals("prompt-tester", event.service)
         assertEquals("web", event.kind)
@@ -40,7 +40,7 @@ class TestRunFinalizerTest {
     void testAlreadyPublishedRunIsNotPublishedAgain() {
         Instant triggeredAt = Instant.now().minusSeconds(5)
         storeRun(triggeredAt, true)
-        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.plusSeconds(1), "123") }
+        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.plusSeconds(1), PromptEventTestService.MARKER) }
 
         finalizer().finalizeIfComplete()
 
@@ -51,7 +51,7 @@ class TestRunFinalizerTest {
     void testMissingReceiptHoldsThePublish() {
         Instant triggeredAt = Instant.now().minusSeconds(5)
         storeRun(triggeredAt, false)
-        PromptEventTestService.IMMEDIATE_TOPICS.tail().each { storeReceipt(it, triggeredAt.plusSeconds(1), "123") }
+        PromptEventTestService.IMMEDIATE_TOPICS.tail().each { storeReceipt(it, triggeredAt.plusSeconds(1), PromptEventTestService.MARKER) }
 
         finalizer().finalizeIfComplete()
 
@@ -60,10 +60,21 @@ class TestRunFinalizerTest {
     }
 
     @Test
-    void testReceiptsFromAnotherRunHoldThePublish() {
+    void testReceiptsWithoutTheMarkerHoldThePublish() {
         Instant triggeredAt = Instant.now().minusSeconds(5)
         storeRun(triggeredAt, false)
-        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.plusSeconds(1), "999") }
+        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.plusSeconds(1), "some other question") }
+
+        finalizer().finalizeIfComplete()
+
+        assertTrue(sentEvents.isEmpty())
+    }
+
+    @Test
+    void testReceiptsOlderThanTheTriggerHoldThePublish() {
+        Instant triggeredAt = Instant.now().minusSeconds(5)
+        storeRun(triggeredAt, false)
+        PromptEventTestService.IMMEDIATE_TOPICS.each { storeReceipt(it, triggeredAt.minusSeconds(1), PromptEventTestService.MARKER) }
 
         finalizer().finalizeIfComplete()
 
@@ -77,13 +88,57 @@ class TestRunFinalizerTest {
         assertTrue(sentEvents.isEmpty())
     }
 
+    @Test
+    void testStaleUnpublishedRunIsReportedAsAFailure() {
+        Instant triggeredAt = Instant.now().minusSeconds(3600)
+        storeRun(triggeredAt, false)
+
+        finalizer().closeOutStaleRun()
+
+        assertEquals(1, sentEvents.size())
+        Map event = publishedEvent()
+        assertFalse(event.success as boolean)
+        assertEquals("prompt-tester", event.service)
+        assertEquals(4, (event.numberOfTests as Number).intValue())
+        assertTrue(gson.fromJson(objects["run"], TestRun).published)
+    }
+
+    @Test
+    void testStaleFailureIsDatedWhenTheRunActuallyRan() {
+        Instant triggeredAt = Instant.now().minusSeconds(3600)
+        storeRun(triggeredAt, false)
+
+        finalizer().closeOutStaleRun()
+
+        assertEquals(triggeredAt.truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString(), publishedEvent().date)
+    }
+
+    @Test
+    void testRunStillInFlightIsNotClosedOut() {
+        storeRun(Instant.now().minusSeconds(5), false)
+
+        finalizer().closeOutStaleRun()
+
+        assertTrue(sentEvents.isEmpty())
+    }
+
+    @Test
+    void testPublishedRunIsNotClosedOut() {
+        storeRun(Instant.now().minusSeconds(3600), true)
+
+        finalizer().closeOutStaleRun()
+
+        assertTrue(sentEvents.isEmpty())
+    }
+
+    private Map publishedEvent() {
+        return gson.fromJson(sentEvents.first().body, Map)
+    }
+
     private TestRunFinalizer finalizer() {
         SecureHttpClient client = httpClient()
         ReceiptService receiptService = new ReceiptService(client)
-        TestRunFinalizer testRunFinalizer = new TestRunFinalizer(
-                new PromptEventTestService(client, receiptService), receiptService, client)
-        testRunFinalizer.publishGraceMillis = 0
-        return testRunFinalizer
+        return new TestRunFinalizer(new PromptEventTestService(client, receiptService), receiptService, client)
     }
 
     private SecureHttpClient httpClient() {
@@ -103,12 +158,12 @@ class TestRunFinalizerTest {
 
     private void storeRun(Instant triggeredAt, boolean published) {
         objects["run"] = gson.toJson(new TestRun(source: "prompt-tester", kind: "web",
-                triggeredAt: triggeredAt.toString(), questionIds: ["123"], published: published))
+                triggeredAt: triggeredAt.toString(), published: published))
     }
 
-    private void storeReceipt(String topic, Instant timestamp, String questionId) {
-        objects[topic] = gson.toJson([id       : topic, topic: topic, timestamp: timestamp.toString(),
-                                      payload  : gson.toJson([questionId: questionId])])
+    private void storeReceipt(String topic, Instant timestamp, String text) {
+        objects[topic] = gson.toJson([id     : topic, topic: topic, timestamp: timestamp.toString(),
+                                      payload: gson.toJson([questionId: "123", text: "${text} plain question".toString()])])
     }
 
     private static String idOf(String url) {

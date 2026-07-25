@@ -11,16 +11,19 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
- * Publishes the real testResult once every immediate event has come back to /webhook. This runs on
- * the webhook request rather than a thread left behind by /test, because App Engine gives no CPU
- * guarantee outside a request.
+ * Publishes the testResult for a run, the same way a unit or cucumber run reports itself: the
+ * dispatcher does not wait for a verdict, the runner emits one when it has it.
  *
- * PUBLISH_GRACE_MILLIS exists to win a race, not to wait for anything: the testing service turns
- * the /test response into an "unverified" testResult event the moment /test returns, and that event
- * would overwrite a real result that got there first. Holding the publish until the run is 20s old
- * puts it comfortably behind, and stays well inside the 60s Pub/Sub ack deadline.
+ * finalizeIfComplete runs on the webhook request rather than a thread left behind by /test, because
+ * App Engine gives no CPU guarantee outside a request. It stays short on purpose -- it is holding a
+ * Pub/Sub push open, and overrunning ackDeadlineSeconds would redeliver the very events being counted.
+ *
+ * A run whose events never all came back publishes nothing, so closeOutStaleRun reports the previous
+ * run as failed at the start of the next one. Without it a broken prompt pipeline would leave the
+ * suite sitting on its last green result.
  */
 @Singleton
 class TestRunFinalizer {
@@ -28,7 +31,7 @@ class TestRunFinalizer {
     private static final Logger log = LoggerFactory.getLogger(TestRunFinalizer.class.name)
     private static final String TEST_RESULT_TOPIC = "testResult"
 
-    long publishGraceMillis = 20000
+    long staleAfterMillis = 300000
 
     private final PromptEventTestService promptEventTestService
     private final ReceiptService receiptService
@@ -53,36 +56,42 @@ class TestRunFinalizer {
             return
         }
 
-        long triggeredAtMillis = Instant.parse(testRun.triggeredAt).toEpochMilli()
-        int durationMillis = (int) (System.currentTimeMillis() - triggeredAtMillis)
-        awaitPublishGrace(triggeredAtMillis)
-
-        if (receiptService.readRun()?.published) {
-            return
-        }
-        testRun.published = true
-        receiptService.storeRun(testRun)
-
-        TestResult testResult = new TestResult([
-                service       : testRun.source,
-                kind          : testRun.kind,
-                success       : true,
-                numberOfTests : results.size(),
-                durationMillis: durationMillis
-        ])
-        eventClient.sendEvent(TEST_RESULT_TOPIC, testResult)
+        Instant triggeredAt = Instant.parse(testRun.triggeredAt)
+        int durationMillis = (int) (System.currentTimeMillis() - triggeredAt.toEpochMilli())
+        markPublished(testRun)
+        publish(testRun, true, results.size(), durationMillis, Instant.now())
         log.info("Published a passing test result for run ${testRun.triggeredAt} in ${durationMillis}ms")
     }
 
-    private void awaitPublishGrace(long triggeredAtMillis) {
-        long remaining = triggeredAtMillis + publishGraceMillis - System.currentTimeMillis()
-        if (remaining <= 0) {
+    void closeOutStaleRun() {
+        TestRun testRun = receiptService.readRun()
+        if (!testRun || testRun.published) {
             return
         }
-        try {
-            Thread.sleep(Math.min(remaining, publishGraceMillis))
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt()
+
+        Instant triggeredAt = Instant.parse(testRun.triggeredAt)
+        if (triggeredAt.isAfter(Instant.now().minusMillis(staleAfterMillis))) {
+            return
         }
+
+        log.warn("Run ${testRun.triggeredAt} never received every event; reporting it as a failure")
+        markPublished(testRun)
+        publish(testRun, false, PromptEventTestService.IMMEDIATE_TOPICS.size(), 0, triggeredAt)
+    }
+
+    private void markPublished(TestRun testRun) {
+        testRun.published = true
+        receiptService.storeRun(testRun)
+    }
+
+    private void publish(TestRun testRun, boolean success, int numberOfTests, int durationMillis, Instant date) {
+        eventClient.sendEvent(TEST_RESULT_TOPIC, new TestResult([
+                service       : testRun.source,
+                kind          : testRun.kind,
+                success       : success,
+                numberOfTests : numberOfTests,
+                durationMillis: durationMillis,
+                date          : date.truncatedTo(ChronoUnit.SECONDS).toString()
+        ]))
     }
 }

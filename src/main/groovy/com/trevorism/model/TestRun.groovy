@@ -5,6 +5,5 @@ class TestRun {
     String source
     String kind
     String triggeredAt
-    List<String> questionIds
     boolean published
 }
