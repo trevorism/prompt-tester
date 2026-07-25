@@ -67,7 +67,7 @@ class PromptEventTestService {
         warmDependencies()
 
         TestRun testRun = new TestRun(source: testSuite.source, kind: testSuite.kind,
-                suiteId: testSuite.id, triggeredAt: Instant.now().toString())
+                triggeredAt: Instant.now().toString())
         receiptService.storeRun(testRun)
 
         List<String> questionIds = []

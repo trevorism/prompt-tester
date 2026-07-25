@@ -64,12 +64,12 @@ class ReceiptServiceTest {
         ] as SecureHttpClient
         ReceiptService service = new ReceiptService(client)
 
-        service.storeRun(new TestRun(source: "prompt-tester", kind: "web", suiteId: "5958628024516608",
+        service.storeRun(new TestRun(source: "prompt-tester", kind: "web",
                 triggeredAt: TRIGGERED_AT.toString()))
 
         TestRun stored = service.readRun()
         assertEquals("prompt-tester", stored.source)
-        assertEquals("5958628024516608", stored.suiteId)
+        assertEquals("web", stored.kind)
         assertEquals(TRIGGERED_AT.toString(), stored.triggeredAt)
         assertFalse(stored.published)
     }
