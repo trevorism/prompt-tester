@@ -2,11 +2,14 @@ package com.trevorism.service
 
 import com.google.gson.Gson
 import com.trevorism.https.SecureHttpClient
+import com.trevorism.model.TestRun
 import org.junit.jupiter.api.Test
 
 import java.time.Instant
 
+import static org.junit.jupiter.api.Assertions.assertEquals
 import static org.junit.jupiter.api.Assertions.assertFalse
+import static org.junit.jupiter.api.Assertions.assertNull
 import static org.junit.jupiter.api.Assertions.assertTrue
 
 class ReceiptServiceTest {
@@ -54,6 +57,31 @@ class ReceiptServiceTest {
     void testTransportFailureIsRejected() {
         SecureHttpClient client = [get: { String url -> throw new RuntimeException("not found") }] as SecureHttpClient
         assertFalse(new ReceiptService(client).receivedSince("questionAsked", TRIGGERED_AT, ["123"]))
+    }
+
+    @Test
+    void testRunRecordRoundTrips() {
+        Map<String, String> objects = [:]
+        SecureHttpClient client = [
+                get   : { String url -> objects[url.substring(url.lastIndexOf('/') + 1)] },
+                post  : { String url, String body -> objects[gson.fromJson(body, Map).id as String] = body },
+                delete: { String url -> objects.remove(url.substring(url.lastIndexOf('/') + 1)) }
+        ] as SecureHttpClient
+        ReceiptService service = new ReceiptService(client)
+
+        service.storeRun(new TestRun(source: "prompt-tester", kind: "web",
+                triggeredAt: TRIGGERED_AT.toString(), questionIds: ["123"]))
+
+        TestRun stored = service.readRun()
+        assertEquals("prompt-tester", stored.source)
+        assertEquals(["123"], stored.questionIds)
+        assertEquals(TRIGGERED_AT.toString(), stored.triggeredAt)
+        assertFalse(stored.published)
+    }
+
+    @Test
+    void testNoRunRecordReadsAsNull() {
+        assertNull(serviceReturning(null).readRun())
     }
 
     private static ReceiptService serviceReturning(String response) {

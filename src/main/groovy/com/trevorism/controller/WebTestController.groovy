@@ -9,12 +9,15 @@ import io.micronaut.http.MediaType
 import io.micronaut.http.annotation.Body
 import io.micronaut.http.annotation.Controller
 import io.micronaut.http.annotation.Post
+import io.micronaut.scheduling.TaskExecutors
+import io.micronaut.scheduling.annotation.ExecuteOn
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 @Controller("/test")
+@ExecuteOn(TaskExecutors.BLOCKING)
 class WebTestController {
 
     private static final Logger log = LoggerFactory.getLogger(WebTestController.class.name)
@@ -26,7 +29,7 @@ class WebTestController {
     }
 
     @Tag(name = "Test Endpoint Operations")
-    @Operation(summary = "Validates the prompt event system end-to-end **Secure")
+    @Operation(summary = "Triggers the prompt event check; the verdict is published as a testResult event once the events return **Secure")
     @Post(produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)
     @Secure(Roles.USER)
     TestResult testPromptSystem(@Body TestSuite testSuite) {
@@ -36,13 +39,11 @@ class WebTestController {
             return createTestResult(testSuite, false, 0, startTime)
         }
         try {
-            List<Boolean> results = promptEventTestService.runImmediateChecks()
-            boolean didAllTestsPass = results.every { it }
-            return createTestResult(testSuite, didAllTestsPass, results.size(), startTime)
+            promptEventTestService.triggerImmediateEvents(testSuite)
         } catch (Exception e) {
-            log.warn("Test has failures", e)
+            log.warn("Could not trigger the prompt events", e)
         }
-        return createTestResult(testSuite, false, PromptEventTestService.IMMEDIATE_TOPICS.size(), startTime)
+        return createTestResult(testSuite, false, 0, startTime)
     }
 
     private static TestResult createTestResult(TestSuite testSuite, boolean success, int numberOfTests, long startTime) {
