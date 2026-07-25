@@ -18,7 +18,7 @@ import java.time.Instant
  * Validates prompt's four synchronous events end-to-end, split across two inbound requests because
  * this app is both the trigger and the subscriber:
  *   1. ensure a persistent, reused subscription exists per immediate topic -> this app's /webhook/{topic}
- *   2. exercise prompt's real endpoints so each event fires, and record the run
+ *   2. record the run, then exercise prompt's real endpoints so each event fires
  *   3. best-effort delete the questions/answers created (subscriptions are left in place)
  *   4. later, as each event is pushed back to /webhook, TestRunFinalizer checks the receipts
  *
@@ -55,16 +55,23 @@ class PromptEventTestService {
     }
 
     /**
-     * Fires the four immediate events and records the run so the webhook side can recognise which
-     * receipts belong to it. Throwing is left to the caller's try/catch.
+     * Records the run and then fires the four immediate events. The record is written FIRST and is
+     * complete as written: a receipt can arrive within a second of its event, and if the record is
+     * not already there the webhook that completes the set has nothing to finalize against and no
+     * later webhook comes to try again.
+     *
+     * Throwing is left to the caller's try/catch.
      */
     TestRun triggerImmediateEvents(TestSuite testSuite) {
         ensureSubscriptions()
         warmDependencies()
 
+        TestRun testRun = new TestRun(source: testSuite.source, kind: testSuite.kind,
+                suiteId: testSuite.id, triggeredAt: Instant.now().toString())
+        receiptService.storeRun(testRun)
+
         List<String> questionIds = []
         List<String> answerIds = []
-        Instant triggeredAt = Instant.now()
         try {
             // questionAsked + questionAnswered
             Map plain = createQuestion([text: "${MARKER} plain question".toString(), kind: "question"], questionIds)
@@ -74,9 +81,6 @@ class PromptEventTestService {
                                            kind: "approval", targetIdentityId: APPROVER], questionIds)
             answerQuestion(approval.id as String, [text: "${MARKER} looks good".toString(), approved: true], answerIds)
 
-            TestRun testRun = new TestRun(source: testSuite.source, kind: testSuite.kind,
-                    triggeredAt: triggeredAt.toString(), questionIds: questionIds)
-            receiptService.storeRun(testRun)
             log.info("Triggered immediate events for questions ${questionIds}")
             return testRun
         } finally {
@@ -88,7 +92,7 @@ class PromptEventTestService {
     List<Boolean> receiptStatus(TestRun testRun) {
         Instant since = Instant.parse(testRun.triggeredAt)
         return IMMEDIATE_TOPICS.collect { String topic ->
-            receiptService.receivedSince(topic, since, testRun.questionIds)
+            receiptService.receivedSince(topic, since, MARKER)
         }
     }
 

@@ -16,47 +16,42 @@ class ReceiptServiceTest {
 
     private static final Gson gson = new Gson()
     private static final Instant TRIGGERED_AT = Instant.parse("2026-07-25T14:00:00Z")
+    private static final String MARKER = "[prompt-tester]"
 
     @Test
     void testReceiptFromThisRunIsAccepted() {
-        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.plusSeconds(5), "123"))
-        assertTrue(service.receivedSince("questionAsked", TRIGGERED_AT, ["123"]))
+        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.plusSeconds(5), "${MARKER} plain question"))
+        assertTrue(service.receivedSince("questionAsked", TRIGGERED_AT, MARKER))
     }
 
     @Test
-    void testRedeliveryFromAnotherRunIsRejected() {
-        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.plusSeconds(1), "999"))
-        assertFalse(service.receivedSince("approvalRequested", TRIGGERED_AT, ["123"]))
+    void testReceiptFromUnrelatedTrafficIsRejected() {
+        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.plusSeconds(1), "a real question from a user"))
+        assertFalse(service.receivedSince("approvalRequested", TRIGGERED_AT, MARKER))
     }
 
     @Test
     void testReceiptOlderThanTheTriggerIsRejected() {
-        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.minusSeconds(5), "123"))
-        assertFalse(service.receivedSince("questionAsked", TRIGGERED_AT, ["123"]))
+        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.minusSeconds(5), "${MARKER} plain question"))
+        assertFalse(service.receivedSince("questionAsked", TRIGGERED_AT, MARKER))
     }
 
     @Test
-    void testReceiptWithoutAQuestionIdIsRejected() {
+    void testReceiptWithAnEmptyPayloadIsRejected() {
         String payload = gson.toJson([id: "questionAsked", topic: "questionAsked",
                                       timestamp: TRIGGERED_AT.plusSeconds(5).toString(), payload: "{}"])
-        assertFalse(serviceReturning(payload).receivedSince("questionAsked", TRIGGERED_AT, ["123"]))
+        assertFalse(serviceReturning(payload).receivedSince("questionAsked", TRIGGERED_AT, MARKER))
     }
 
     @Test
     void testNoReceiptIsRejected() {
-        assertFalse(serviceReturning(null).receivedSince("questionAsked", TRIGGERED_AT, ["123"]))
-    }
-
-    @Test
-    void testRunWithNoCreatedQuestionsIsRejected() {
-        ReceiptService service = serviceReturning(receipt(TRIGGERED_AT.plusSeconds(5), "123"))
-        assertFalse(service.receivedSince("questionAsked", TRIGGERED_AT, []))
+        assertFalse(serviceReturning(null).receivedSince("questionAsked", TRIGGERED_AT, MARKER))
     }
 
     @Test
     void testTransportFailureIsRejected() {
         SecureHttpClient client = [get: { String url -> throw new RuntimeException("not found") }] as SecureHttpClient
-        assertFalse(new ReceiptService(client).receivedSince("questionAsked", TRIGGERED_AT, ["123"]))
+        assertFalse(new ReceiptService(client).receivedSince("questionAsked", TRIGGERED_AT, MARKER))
     }
 
     @Test
@@ -69,12 +64,12 @@ class ReceiptServiceTest {
         ] as SecureHttpClient
         ReceiptService service = new ReceiptService(client)
 
-        service.storeRun(new TestRun(source: "prompt-tester", kind: "web",
-                triggeredAt: TRIGGERED_AT.toString(), questionIds: ["123"]))
+        service.storeRun(new TestRun(source: "prompt-tester", kind: "web", suiteId: "5958628024516608",
+                triggeredAt: TRIGGERED_AT.toString()))
 
         TestRun stored = service.readRun()
         assertEquals("prompt-tester", stored.source)
-        assertEquals(["123"], stored.questionIds)
+        assertEquals("5958628024516608", stored.suiteId)
         assertEquals(TRIGGERED_AT.toString(), stored.triggeredAt)
         assertFalse(stored.published)
     }
@@ -88,8 +83,8 @@ class ReceiptServiceTest {
         new ReceiptService([get: { String url -> response }] as SecureHttpClient)
     }
 
-    private static String receipt(Instant timestamp, String questionId) {
-        gson.toJson([id       : "questionAsked", topic: "questionAsked", timestamp: timestamp.toString(),
-                     payload  : gson.toJson([questionId: questionId])])
+    private static String receipt(Instant timestamp, String text) {
+        gson.toJson([id     : "questionAsked", topic: "questionAsked", timestamp: timestamp.toString(),
+                     payload: gson.toJson([questionId: "123", text: text])])
     }
 }

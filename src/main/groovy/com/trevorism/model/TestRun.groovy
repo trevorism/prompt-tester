@@ -4,7 +4,7 @@ class TestRun {
     String id = "run"
     String source
     String kind
+    String suiteId
     String triggeredAt
-    List<String> questionIds
     boolean published
 }
