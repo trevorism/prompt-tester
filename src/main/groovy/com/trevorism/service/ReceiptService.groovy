@@ -2,6 +2,7 @@ package com.trevorism.service
 
 import com.google.gson.Gson
 import com.trevorism.https.SecureHttpClient
+import com.trevorism.model.TestRun
 import jakarta.inject.Named
 import jakarta.inject.Singleton
 import org.slf4j.Logger
@@ -21,6 +22,7 @@ class ReceiptService {
     private static final Logger log = LoggerFactory.getLogger(ReceiptService.class.name)
     private static final String OBJECT_URL = "https://memory.data.trevorism.com/object/prompt-event"
     private static final String PING_URL = "https://memory.data.trevorism.com/ping"
+    private static final String RUN_ID = "run"
 
     private final SecureHttpClient secureHttpClient
     private final Gson gson = new Gson()
@@ -32,12 +34,31 @@ class ReceiptService {
     /** Upsert the latest receipt for a topic (id = topic), stamped with the current time. */
     void store(String topic, String payload) {
         Map record = [id: topic, topic: topic, timestamp: Instant.now().toString(), payload: payload]
+        upsert(topic, gson.toJson(record))
+    }
+
+    void storeRun(TestRun testRun) {
+        upsert(RUN_ID, gson.toJson(testRun))
+    }
+
+    TestRun readRun() {
         try {
-            secureHttpClient.delete("${OBJECT_URL}/${topic}".toString())
+            String response = secureHttpClient.get("${OBJECT_URL}/${RUN_ID}".toString())
+            if (!response) return null
+            return gson.fromJson(response, TestRun)
         } catch (Exception e) {
-            log.debug("No prior receipt for ${topic} to delete: ${e.message}")
+            log.debug("No test run recorded yet: ${e.message}")
+            return null
         }
-        secureHttpClient.post(OBJECT_URL, gson.toJson(record))
+    }
+
+    private void upsert(String id, String json) {
+        try {
+            secureHttpClient.delete("${OBJECT_URL}/${id}".toString())
+        } catch (Exception e) {
+            log.debug("No prior record for ${id} to delete: ${e.message}")
+        }
+        secureHttpClient.post(OBJECT_URL, json)
     }
 
     /** True if a receipt exists for the topic, at or after {@code since}, from one of these questions. */

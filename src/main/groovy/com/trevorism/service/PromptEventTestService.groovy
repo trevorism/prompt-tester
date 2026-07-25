@@ -5,6 +5,8 @@ import com.trevorism.event.ChannelClient
 import com.trevorism.event.DefaultChannelClient
 import com.trevorism.event.model.EventSubscription
 import com.trevorism.https.SecureHttpClient
+import com.trevorism.model.TestRun
+import com.trevorism.model.TestSuite
 import jakarta.inject.Named
 import jakarta.inject.Singleton
 import org.slf4j.Logger
@@ -13,11 +15,15 @@ import org.slf4j.LoggerFactory
 import java.time.Instant
 
 /**
- * Validates prompt's four synchronous events end-to-end:
+ * Validates prompt's four synchronous events end-to-end, split across two inbound requests because
+ * this app is both the trigger and the subscriber:
  *   1. ensure a persistent, reused subscription exists per immediate topic -> this app's /webhook/{topic}
- *   2. exercise prompt's real endpoints so each event fires
- *   3. verify each event was pushed to our webhook and recorded (via ReceiptService / memory service)
- *   4. best-effort delete the questions/answers created (subscriptions are left in place)
+ *   2. exercise prompt's real endpoints so each event fires, and record the run
+ *   3. best-effort delete the questions/answers created (subscriptions are left in place)
+ *   4. later, as each event is pushed back to /webhook, TestRunFinalizer checks the receipts
+ *
+ * Nothing here waits on a receipt. A /test call that blocks starves the very webhook it is waiting
+ * for, which pushes delivery into Pub/Sub retry backoff and fails the run.
  *
  * All outbound calls use the app-credentials client (promptTesterSecureHttpClient), like event-tester,
  * so behavior does not depend on the caller's token. The scheduler-driven due-date events
@@ -36,9 +42,6 @@ class PromptEventTestService {
     /** The four events prompt emits synchronously when its endpoints are called. */
     static final List<String> IMMEDIATE_TOPICS = ["questionAsked", "questionAnswered", "approvalRequested", "approvalDecided"]
 
-    private static final int POLL_TIMEOUT_SECONDS = 150
-    private static final int POLL_INTERVAL_MILLIS = 3000
-
     private final SecureHttpClient secureHttpClient
     private final ChannelClient channelClient
     private final ReceiptService receiptService
@@ -52,11 +55,10 @@ class PromptEventTestService {
     }
 
     /**
-     * Runs the immediate-event validation and returns one boolean per topic (in IMMEDIATE_TOPICS
-     * order): true if that event was received by our webhook after the trigger. Throwing is left to
-     * the caller's try/catch (an exception ⇒ overall failure).
+     * Fires the four immediate events and records the run so the webhook side can recognise which
+     * receipts belong to it. Throwing is left to the caller's try/catch.
      */
-    List<Boolean> runImmediateChecks() {
+    TestRun triggerImmediateEvents(TestSuite testSuite) {
         ensureSubscriptions()
         warmDependencies()
 
@@ -72,9 +74,21 @@ class PromptEventTestService {
                                            kind: "approval", targetIdentityId: APPROVER], questionIds)
             answerQuestion(approval.id as String, [text: "${MARKER} looks good".toString(), approved: true], answerIds)
 
-            return pollForReceipts(triggeredAt, questionIds)
+            TestRun testRun = new TestRun(source: testSuite.source, kind: testSuite.kind,
+                    triggeredAt: triggeredAt.toString(), questionIds: questionIds)
+            receiptService.storeRun(testRun)
+            log.info("Triggered immediate events for questions ${questionIds}")
+            return testRun
         } finally {
             cleanup(questionIds, answerIds)
+        }
+    }
+
+    /** One boolean per topic (in IMMEDIATE_TOPICS order): true if that event came back for this run. */
+    List<Boolean> receiptStatus(TestRun testRun) {
+        Instant since = Instant.parse(testRun.triggeredAt)
+        return IMMEDIATE_TOPICS.collect { String topic ->
+            receiptService.receivedSince(topic, since, testRun.questionIds)
         }
     }
 
@@ -107,20 +121,6 @@ class PromptEventTestService {
                 catch (Exception e) { log.warn("Could not create subscription ${name}: ${e.message}") }
             }
         }
-    }
-
-    private List<Boolean> pollForReceipts(Instant since, List<String> questionIds) {
-        long deadline = System.currentTimeMillis() + (POLL_TIMEOUT_SECONDS * 1000L)
-        List<Boolean> results = IMMEDIATE_TOPICS.collect { false }
-        while (System.currentTimeMillis() < deadline) {
-            IMMEDIATE_TOPICS.eachWithIndex { String topic, int i ->
-                if (!results[i]) results[i] = receiptService.receivedSince(topic, since, questionIds)
-            }
-            if (results.every { it }) break
-            Thread.sleep(POLL_INTERVAL_MILLIS)
-        }
-        log.info("Immediate event receipts: ${[IMMEDIATE_TOPICS, results].transpose()}")
-        return results
     }
 
     private Map createQuestion(Map body, List<String> track) {
