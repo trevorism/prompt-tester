@@ -36,7 +36,7 @@ class PromptEventTestService {
     /** The four events prompt emits synchronously when its endpoints are called. */
     static final List<String> IMMEDIATE_TOPICS = ["questionAsked", "questionAnswered", "approvalRequested", "approvalDecided"]
 
-    private static final int POLL_TIMEOUT_SECONDS = 60
+    private static final int POLL_TIMEOUT_SECONDS = 150
     private static final int POLL_INTERVAL_MILLIS = 3000
 
     private final SecureHttpClient secureHttpClient
@@ -58,6 +58,7 @@ class PromptEventTestService {
      */
     List<Boolean> runImmediateChecks() {
         ensureSubscriptions()
+        warmDependencies()
 
         List<String> questionIds = []
         List<String> answerIds = []
@@ -71,10 +72,19 @@ class PromptEventTestService {
                                            kind: "approval", targetIdentityId: APPROVER], questionIds)
             answerQuestion(approval.id as String, [text: "${MARKER} looks good".toString(), approved: true], answerIds)
 
-            return pollForReceipts(triggeredAt)
+            return pollForReceipts(triggeredAt, questionIds)
         } finally {
             cleanup(questionIds, answerIds)
         }
+    }
+
+    private void warmDependencies() {
+        try {
+            secureHttpClient.get("${PROMPT_URL}/api/ping".toString())
+        } catch (Exception e) {
+            log.warn("Could not warm prompt: ${e.message}")
+        }
+        receiptService.warm()
     }
 
     /** Ensure a persistent subscription (stable name, reused across runs) exists per immediate topic. */
@@ -99,12 +109,12 @@ class PromptEventTestService {
         }
     }
 
-    private List<Boolean> pollForReceipts(Instant since) {
+    private List<Boolean> pollForReceipts(Instant since, List<String> questionIds) {
         long deadline = System.currentTimeMillis() + (POLL_TIMEOUT_SECONDS * 1000L)
         List<Boolean> results = IMMEDIATE_TOPICS.collect { false }
         while (System.currentTimeMillis() < deadline) {
             IMMEDIATE_TOPICS.eachWithIndex { String topic, int i ->
-                if (!results[i]) results[i] = receiptService.receivedSince(topic, since)
+                if (!results[i]) results[i] = receiptService.receivedSince(topic, since, questionIds)
             }
             if (results.every { it }) break
             Thread.sleep(POLL_INTERVAL_MILLIS)
