@@ -175,7 +175,12 @@ class TestRunFinalizerTest {
 
     private SecureHttpClient httpClient() {
         [
-                get   : { String url -> objects[idOf(url)] },
+                get   : { String url ->
+                    if (url.contains("/prompt-run-claim/")) {
+                        return claims.contains(idOf(url)) ? "{}" : null
+                    }
+                    return objects[idOf(url)]
+                },
                 post  : { String url, String body ->
                     if (url.contains("/event/")) {
                         sentEvents << [url: url, body: body]

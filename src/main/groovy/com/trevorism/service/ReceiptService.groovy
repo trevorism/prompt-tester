@@ -31,6 +31,9 @@ class ReceiptService {
     private static final String RUN_ID = "run"
     private static final int NOT_FOUND = 404
     private static final int CONFLICT = 409
+    private static final int MAX_ATTEMPTS = 5
+
+    long retryBackoffMillis = 50
 
     private final SecureHttpClient secureHttpClient
     private final Gson gson = new Gson()
@@ -60,13 +63,37 @@ class ReceiptService {
         }
     }
 
-    /** True if this caller is the one that gets to report the run, false if someone else already has. */
+    /**
+     * True if this caller is the one that gets to report the run, false if someone else already has.
+     *
+     * A 409 alone does not mean the run is taken. A kind is one blob, so a create also loses to a
+     * concurrent write of any other id in it -- resetClaims, say. Reading the row back is what tells
+     * the two apart: present means genuinely claimed, absent means only the write was lost.
+     */
     boolean claimRun(TestRun testRun) {
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                secureHttpClient.post(CLAIM_URL, gson.toJson([id: testRun.triggeredAt]))
+                return true
+            } catch (InvalidRequestException e) {
+                if (e.statusCode != CONFLICT) {
+                    throw e
+                }
+                if (claimExists(testRun.triggeredAt)) {
+                    return false
+                }
+                backOff(attempt)
+            }
+        }
+        log.warn("Could not claim run ${testRun.triggeredAt} in ${MAX_ATTEMPTS} attempts; leaving it unreported")
+        return false
+    }
+
+    private boolean claimExists(String triggeredAt) {
         try {
-            secureHttpClient.post(CLAIM_URL, gson.toJson([id: testRun.triggeredAt]))
-            return true
+            return secureHttpClient.get("${CLAIM_URL}/${triggeredAt}".toString()) as boolean
         } catch (InvalidRequestException e) {
-            if (e.statusCode == CONFLICT) {
+            if (e.statusCode == NOT_FOUND) {
                 return false
             }
             throw e
@@ -82,22 +109,46 @@ class ReceiptService {
         }
     }
 
+    /**
+     * A kind is a single blob, so the four receipts of one run are four writers of the same file and
+     * a 409 here means "the blob moved", not "your write was wrong". Re-reading and re-applying is
+     * the whole of the recovery; giving up would drop a receipt and strand the run as incomplete.
+     */
     private void upsert(String id, String json) {
-        try {
-            secureHttpClient.put("${OBJECT_URL}/${id}".toString(), json)
-            return
-        } catch (InvalidRequestException e) {
-            if (e.statusCode != NOT_FOUND) {
-                throw e
+        String url = "${OBJECT_URL}/${id}".toString()
+        InvalidRequestException lastConflict = null
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                secureHttpClient.put(url, json)
+                return
+            } catch (InvalidRequestException e) {
+                if (e.statusCode == CONFLICT) {
+                    lastConflict = e
+                    backOff(attempt)
+                    continue
+                }
+                if (e.statusCode != NOT_FOUND) {
+                    throw e
+                }
+            }
+            try {
+                secureHttpClient.post(OBJECT_URL, json)
+                return
+            } catch (InvalidRequestException e) {
+                if (e.statusCode != CONFLICT) {
+                    throw e
+                }
+                lastConflict = e
+                backOff(attempt)
             }
         }
-        try {
-            secureHttpClient.post(OBJECT_URL, json)
-        } catch (InvalidRequestException e) {
-            if (e.statusCode != CONFLICT) {
-                throw e
-            }
-            secureHttpClient.put("${OBJECT_URL}/${id}".toString(), json)
+        log.warn("Could not store ${id} in ${MAX_ATTEMPTS} attempts against a contended store")
+        throw lastConflict
+    }
+
+    private void backOff(int attempt) {
+        if (retryBackoffMillis > 0) {
+            Thread.sleep(retryBackoffMillis * attempt)
         }
     }
 

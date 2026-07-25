@@ -105,15 +105,103 @@ class ReceiptServiceTest {
     }
 
     @Test
-    void testTheFirstClaimWinsAndTheRestLose() {
-        Set<String> claims = [] as Set
-        SecureHttpClient client = [post: { String url, String body ->
-            String id = gson.fromJson(body, Map).id as String
-            if (!claims.add(id)) {
+    void testALostWriteRaceIsRetriedRatherThanFailingTheStore() {
+        Map<String, String> objects = ["questionAsked": "seeded"]
+        int puts = 0
+        SecureHttpClient client = [put: { String url, String body ->
+            if (++puts < 3) {
                 throw status(409)
             }
-            return body
+            objects[idOf(url)] = body
         }] as SecureHttpClient
+        ReceiptService service = new ReceiptService(client)
+        service.retryBackoffMillis = 0
+
+        service.store("questionAsked", "a payload")
+
+        assertEquals(3, puts)
+        assertTrue(objects["questionAsked"].contains("a payload"))
+    }
+
+    @Test
+    void testAStoreThatNeverWinsTheRaceIsReportedRatherThanSilentlyDropped() {
+        SecureHttpClient client = [put: { String url, String body -> throw status(409) }] as SecureHttpClient
+        ReceiptService service = new ReceiptService(client)
+        service.retryBackoffMillis = 0
+
+        InvalidRequestException e = assertThrows(InvalidRequestException, () -> service.store("questionAsked", "{}"))
+        assertEquals(409, e.statusCode)
+    }
+
+    @Test
+    void testAStoreFailureThatIsNotAConflictIsNotRetried() {
+        int puts = 0
+        SecureHttpClient client = [put: { String url, String body -> puts++; throw status(500) }] as SecureHttpClient
+
+        assertThrows(InvalidRequestException, () -> new ReceiptService(client).store("questionAsked", "{}"))
+        assertEquals(1, puts)
+    }
+
+    @Test
+    void testAClaimThatLostOnlyTheWriteIsRetriedAndCanStillWin() {
+        Set<String> claims = [] as Set
+        int posts = 0
+        SecureHttpClient client = [
+                post: { String url, String body ->
+                    if (++posts < 3) {
+                        throw status(409)
+                    }
+                    claims << (gson.fromJson(body, Map).id as String)
+                    return body
+                },
+                get : { String url -> claims.contains(idOf(url)) ? "{}" : null }
+        ] as SecureHttpClient
+        ReceiptService service = new ReceiptService(client)
+        service.retryBackoffMillis = 0
+
+        assertTrue(service.claimRun(new TestRun(triggeredAt: TRIGGERED_AT.toString())))
+        assertEquals(3, posts)
+    }
+
+    @Test
+    void testAClaimIsNotRetriedOnceTheRowIsActuallyThere() {
+        int posts = 0
+        SecureHttpClient client = [
+                post: { String url, String body -> posts++; throw status(409) },
+                get : { String url -> "{\"id\":\"${idOf(url)}\"}".toString() }
+        ] as SecureHttpClient
+        ReceiptService service = new ReceiptService(client)
+        service.retryBackoffMillis = 0
+
+        assertFalse(service.claimRun(new TestRun(triggeredAt: TRIGGERED_AT.toString())))
+        assertEquals(1, posts)
+    }
+
+    @Test
+    void testAClaimThatNeverLandsDoesNotReportTheRun() {
+        SecureHttpClient client = [
+                post: { String url, String body -> throw status(409) },
+                get : { String url -> null }
+        ] as SecureHttpClient
+        ReceiptService service = new ReceiptService(client)
+        service.retryBackoffMillis = 0
+
+        assertFalse(service.claimRun(new TestRun(triggeredAt: TRIGGERED_AT.toString())))
+    }
+
+    @Test
+    void testTheFirstClaimWinsAndTheRestLose() {
+        Set<String> claims = [] as Set
+        SecureHttpClient client = [
+                post: { String url, String body ->
+                    String id = gson.fromJson(body, Map).id as String
+                    if (!claims.add(id)) {
+                        throw status(409)
+                    }
+                    return body
+                },
+                get : { String url -> claims.contains(idOf(url)) ? "{}" : null }
+        ] as SecureHttpClient
         ReceiptService service = new ReceiptService(client)
         TestRun testRun = new TestRun(triggeredAt: TRIGGERED_AT.toString())
 
