@@ -24,6 +24,10 @@ import java.time.temporal.ChronoUnit
  * A run whose events never all came back publishes nothing, so closeOutStaleRun reports the previous
  * run as failed at the start of the next one. Without it a broken prompt pipeline would leave the
  * suite sitting on its last green result.
+ *
+ * Both paths claim the run before reporting it, so a run is reported once whichever gets there
+ * first. Reading a "published" flag could not do this: the pushes that race here all read it before
+ * any of them had written it back.
  */
 @Singleton
 class TestRunFinalizer {
@@ -46,7 +50,7 @@ class TestRunFinalizer {
 
     void finalizeIfComplete() {
         TestRun testRun = receiptService.readRun()
-        if (!testRun || testRun.published) {
+        if (!testRun) {
             return
         }
 
@@ -58,14 +62,17 @@ class TestRunFinalizer {
 
         Instant triggeredAt = Instant.parse(testRun.triggeredAt)
         int durationMillis = (int) (System.currentTimeMillis() - triggeredAt.toEpochMilli())
-        markPublished(testRun)
+        if (!receiptService.claimRun(testRun)) {
+            log.info("Run ${testRun.triggeredAt} was already reported by another webhook")
+            return
+        }
         publish(testRun, true, results.size(), durationMillis, Instant.now())
         log.info("Published a passing test result for run ${testRun.triggeredAt} in ${durationMillis}ms")
     }
 
     void closeOutStaleRun() {
         TestRun testRun = receiptService.readRun()
-        if (!testRun || testRun.published) {
+        if (!testRun) {
             return
         }
 
@@ -73,15 +80,12 @@ class TestRunFinalizer {
         if (triggeredAt.isAfter(Instant.now().minusMillis(staleAfterMillis))) {
             return
         }
+        if (!receiptService.claimRun(testRun)) {
+            return
+        }
 
         log.warn("Run ${testRun.triggeredAt} never received every event; reporting it as a failure")
-        markPublished(testRun)
         publish(testRun, false, PromptEventTestService.IMMEDIATE_TOPICS.size(), 0, triggeredAt)
-    }
-
-    private void markPublished(TestRun testRun) {
-        testRun.published = true
-        receiptService.storeRun(testRun)
     }
 
     private void publish(TestRun testRun, boolean success, int numberOfTests, int durationMillis, Instant date) {

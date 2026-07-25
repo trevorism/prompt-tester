@@ -5,5 +5,4 @@ class TestRun {
     String source
     String kind
     String triggeredAt
-    boolean published
 }
