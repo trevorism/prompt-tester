@@ -14,21 +14,6 @@ import org.slf4j.LoggerFactory
 
 import java.time.Instant
 
-/**
- * Validates prompt's four synchronous events end-to-end, split across two inbound requests because
- * this app is both the trigger and the subscriber:
- *   1. ensure a persistent, reused subscription exists per immediate topic -> this app's /webhook/{topic}
- *   2. record the run, then exercise prompt's real endpoints so each event fires
- *   3. best-effort delete the questions/answers created (subscriptions are left in place)
- *   4. later, as each event is pushed back to /webhook, TestRunFinalizer checks the receipts
- *
- * Nothing here waits on a receipt. A /test call that blocks starves the very webhook it is waiting
- * for, which pushes delivery into Pub/Sub retry backoff and fails the run.
- *
- * All outbound calls use the app-credentials client (promptTesterSecureHttpClient), like event-tester,
- * so behavior does not depend on the caller's token. The scheduler-driven due-date events
- * (questionOverdue / approvalExpired) are intentionally out of scope for the standard /test run.
- */
 @Singleton
 class PromptEventTestService {
 
@@ -38,8 +23,6 @@ class PromptEventTestService {
     static final String PROMPT_URL = "https://prompt.action.trevorism.com"
     static final String MARKER = "[prompt-tester]"
     static final String APPROVER = "prompt-tester"
-
-    /** The four events prompt emits synchronously when its endpoints are called. */
     static final List<String> IMMEDIATE_TOPICS = ["questionAsked", "questionAnswered", "approvalRequested", "approvalDecided"]
 
     private final SecureHttpClient secureHttpClient
@@ -54,14 +37,6 @@ class PromptEventTestService {
         this.receiptService = receiptService
     }
 
-    /**
-     * Records the run and then fires the four immediate events. The record is written FIRST and is
-     * complete as written: a receipt can arrive within a second of its event, and if the record is
-     * not already there the webhook that completes the set has nothing to finalize against and no
-     * later webhook comes to try again.
-     *
-     * Throwing is left to the caller's try/catch.
-     */
     TestRun triggerImmediateEvents(TestSuite testSuite) {
         ensureSubscriptions()
         warmDependencies()
@@ -74,10 +49,8 @@ class PromptEventTestService {
         List<String> questionIds = []
         List<String> answerIds = []
         try {
-            // questionAsked + questionAnswered
             Map plain = createQuestion([text: "${MARKER} plain question".toString(), kind: "question"], questionIds)
             answerQuestion(plain.id as String, [text: "${MARKER} an answer".toString()], answerIds)
-            // approvalRequested + approvalDecided
             Map approval = createQuestion([text: "${MARKER} approval request".toString(),
                                            kind: "approval", targetIdentityId: APPROVER], questionIds)
             answerQuestion(approval.id as String, [text: "${MARKER} looks good".toString(), approved: true], answerIds)
@@ -89,7 +62,6 @@ class PromptEventTestService {
         }
     }
 
-    /** One boolean per topic (in IMMEDIATE_TOPICS order): true if that event came back for this run. */
     List<Boolean> receiptStatus(TestRun testRun) {
         Instant since = Instant.parse(testRun.triggeredAt)
         return IMMEDIATE_TOPICS.collect { String topic ->
@@ -106,7 +78,6 @@ class PromptEventTestService {
         receiptService.warm()
     }
 
-    /** Ensure a persistent subscription (stable name, reused across runs) exists per immediate topic. */
     private void ensureSubscriptions() {
         List<String> topics = safeList { channelClient.listTopics() }
         List<String> subNames = safeList { channelClient.listSubscriptions()*.name }

@@ -31,12 +31,6 @@ class WebTestController {
         this.testRunFinalizer = testRunFinalizer
     }
 
-    /**
-     * A run that started successfully answers WITHOUT a service or kind. That absence is what tells
-     * the testing service there is no verdict here to publish, leaving this app to emit the
-     * testResult itself once the events return, the way a unit or cucumber run does. A request that
-     * never got as far as firing an event is a verdict, and is answered as one.
-     */
     @Tag(name = "Test Endpoint Operations")
     @Operation(summary = "Triggers the prompt event check; the verdict is published as a testResult event once the events return **Secure")
     @Post(produces = MediaType.APPLICATION_JSON, consumes = MediaType.APPLICATION_JSON)

@@ -11,16 +11,6 @@ import org.slf4j.LoggerFactory
 
 import java.time.Instant
 
-/**
- * Records and reads per-topic event receipts in the shared memory service
- * (memory.data.trevorism.com), so a webhook push handled on one GAE instance is visible to a /test
- * call served by another. One object per topic (id = topic), updated in place.
- *
- * Also hands out the run's publish claim. Four pushes can land within a second of each other and
- * each finds the same complete set of receipts, so "have all the events arrived" cannot decide who
- * reports the run. Creating the claim can: the memory service admits one create per id and answers
- * 409 to the rest, whether the loser saw the row or lost the write race behind it.
- */
 @Singleton
 class ReceiptService {
 
@@ -42,7 +32,6 @@ class ReceiptService {
         this.secureHttpClient = secureHttpClient
     }
 
-    /** Upsert the latest receipt for a topic (id = topic), stamped with the current time. */
     void store(String topic, String payload) {
         Map record = [id: topic, topic: topic, timestamp: Instant.now().toString(), payload: payload]
         upsert(topic, gson.toJson(record))
@@ -63,13 +52,6 @@ class ReceiptService {
         }
     }
 
-    /**
-     * True if this caller is the one that gets to report the run, false if someone else already has.
-     *
-     * A 409 alone does not mean the run is taken. A kind is one blob, so a create also loses to a
-     * concurrent write of any other id in it -- resetClaims, say. Reading the row back is what tells
-     * the two apart: present means genuinely claimed, absent means only the write was lost.
-     */
     boolean claimRun(TestRun testRun) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
@@ -100,7 +82,6 @@ class ReceiptService {
         }
     }
 
-    /** Claims are keyed by trigger time, so clearing them at the start of a run just bounds the file. */
     void resetClaims() {
         try {
             secureHttpClient.put(CLAIM_URL, "[]")
@@ -109,11 +90,6 @@ class ReceiptService {
         }
     }
 
-    /**
-     * A kind is a single blob, so the four receipts of one run are four writers of the same file and
-     * a 409 here means "the blob moved", not "your write was wrong". Re-reading and re-applying is
-     * the whole of the recovery; giving up would drop a receipt and strand the run as incomplete.
-     */
     private void upsert(String id, String json) {
         String url = "${OBJECT_URL}/${id}".toString()
         InvalidRequestException lastConflict = null
@@ -152,7 +128,6 @@ class ReceiptService {
         }
     }
 
-    /** True if a receipt exists for the topic, at or after {@code since}, carrying this test's marker. */
     boolean receivedSince(String topic, Instant since, String marker) {
         try {
             String response = secureHttpClient.get("${OBJECT_URL}/${topic}".toString())

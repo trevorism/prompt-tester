@@ -14,20 +14,6 @@ import io.swagger.v3.oas.annotations.tags.Tag
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-/**
- * Public landing point for events pushed by the event service (Google Pub/Sub push).
- *
- * Deliberately UNSECURED (no @Secure): Pub/Sub posts raw event JSON here with no trevorism bearer
- * token. Each prompt topic is subscribed with a url of .../webhook/{topic}, so the topic arrives as
- * a path var. Receipts are recorded in the shared memory service (ReceiptService) so a push handled
- * on one GAE instance is visible to the /test call on another.
- *
- * NOTE: produces = application/json is REQUIRED. Pub/Sub push sends Accept: application/json; a
- * text/plain-only response yields HTTP 406 and Pub/Sub silently retries then dead-letters.
- *
- * NOTE: @ExecuteOn(BLOCKING) is REQUIRED. Storing a receipt and finalizing a run are blocking HTTP
- * calls; on the event loop they starve the pushes this app is waiting for.
- */
 @Controller("/webhook")
 @ExecuteOn(TaskExecutors.BLOCKING)
 class EventWebhookController {

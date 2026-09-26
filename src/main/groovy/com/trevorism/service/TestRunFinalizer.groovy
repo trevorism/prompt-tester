@@ -13,22 +13,6 @@ import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-/**
- * Publishes the testResult for a run, the same way a unit or cucumber run reports itself: the
- * dispatcher does not wait for a verdict, the runner emits one when it has it.
- *
- * finalizeIfComplete runs on the webhook request rather than a thread left behind by /test, because
- * App Engine gives no CPU guarantee outside a request. It stays short on purpose -- it is holding a
- * Pub/Sub push open, and overrunning ackDeadlineSeconds would redeliver the very events being counted.
- *
- * A run whose events never all came back publishes nothing, so closeOutStaleRun reports the previous
- * run as failed at the start of the next one. Without it a broken prompt pipeline would leave the
- * suite sitting on its last green result.
- *
- * Both paths claim the run before reporting it, so a run is reported once whichever gets there
- * first. Reading a "published" flag could not do this: the pushes that race here all read it before
- * any of them had written it back.
- */
 @Singleton
 class TestRunFinalizer {
 

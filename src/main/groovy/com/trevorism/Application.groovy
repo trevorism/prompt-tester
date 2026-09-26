@@ -10,9 +10,9 @@ import org.slf4j.LoggerFactory
 
 @OpenAPIDefinition(
         info = @Info(
-                title = "App",
-                version = "0.1.0",
-                description = "API",
+                title = "Prompt Tester",
+                version = AppVersion.SEMVER,
+                description = "Tests the prompt application via the async events",
                 contact = @Contact(url = "https://trevorism.com", name = "Trevor Brooks", email = "tbrooks@trevorism.com")
         )
 )
